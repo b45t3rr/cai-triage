@@ -15,7 +15,7 @@
 
 ## Reporte
 
-**Un reporte con información de resultados y configuración se encuentra [AQUI](https://github.com/b45t3rr/cai-triage/blob/main/docs/report.md)
+**Un reporte con información de resultados y configuración se encuentra [AQUI](https://github.com/b45t3rr/cai-triage/blob/main/docs/report.md)**
 
 ## 🏗️ Arquitectura
 
