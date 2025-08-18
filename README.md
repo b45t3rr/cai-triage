@@ -1,4 +1,4 @@
-# Vulnerability Triage System
+# 🛡️ Vulnerability AI Triage System
 
 <div align="center">
 
