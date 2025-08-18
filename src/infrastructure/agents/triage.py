@@ -388,7 +388,9 @@ class TriageAgent:
                     total_unique_vulnerabilities=triage_summary.get('total_unique_vulnerabilities', len(consolidated_vulns)),
                     sources_processed=triage_summary.get('sources_processed', 2),
                     source_files=triage_summary.get('source_files', ["Static Agent Results", "Dynamic Analysis Results"]),
-                    analysis_timestamp=datetime.utcnow()
+                    triage_summary=triage_summary,  # Agregar el resumen completo
+                    analysis_timestamp=datetime.utcnow(),
+                    analysis_completed_at=datetime.utcnow()
                 )
                 
                 # Guardar resultado en MongoDB
@@ -401,6 +403,14 @@ class TriageAgent:
             print(f"Error al procesar los resultados generados: {e}")
         
         # Crear resultado básico si falla el procesamiento
+        basic_triage_summary = {
+            "total_vulnerabilities_before_deduplication": len(vulnerabilities),
+            "unique_vulnerabilities_after_deduplication": len(vulnerabilities),
+            "sources_processed": ["Basic Triage"],
+            "source_files_analyzed": 1,
+            "analysis_completed_at": datetime.utcnow().isoformat()
+        }
+        
         basic_triage = TriageResult(
             id=str(uuid.uuid4()),
             report_id=report_id,
@@ -411,7 +421,9 @@ class TriageAgent:
             total_unique_vulnerabilities=len(vulnerabilities),
             sources_processed=1,
             source_files=["Basic Triage"],
-            analysis_timestamp=datetime.utcnow()
+            triage_summary=basic_triage_summary,
+            analysis_timestamp=datetime.utcnow(),
+            analysis_completed_at=datetime.utcnow()
         )
         
         await self.triage_result_repository.save(basic_triage)

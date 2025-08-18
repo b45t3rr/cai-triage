@@ -242,6 +242,10 @@ class TriageResult:
     # Vulnerabilidades consolidadas
     consolidated_vulnerability_ids: List[str] = field(default_factory=list)
     
+    # Resumen estructurado del triage (para compatibilidad con app.py)
+    triage_summary: Dict[str, Any] = field(default_factory=dict)
+    
     # Metadatos
     created_at: datetime = field(default_factory=datetime.utcnow)
     analysis_timestamp: datetime = field(default_factory=datetime.utcnow)
+    analysis_completed_at: datetime = field(default_factory=datetime.utcnow)

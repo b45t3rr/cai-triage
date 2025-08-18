@@ -1,0 +1,92 @@
+[
+  {
+    "vulnerability_name": "Server-Side Request Forgery (SSRF)",
+    "vulnerability_type": "Server-Side Request Forgery",
+    "original_severity": "Critical",
+    "description": "The application contains a Server-Side Request Forgery vulnerability in the API endpoint that fetches external resources. This allows an attacker to make requests to internal services that should not be accessible from outside the network.",
+    "status": "vulnerable",
+    "evidence": [
+      "SSRF endpoint fetch_url in testing-assets/vuln-app-main/app/routes/api_routes.py uses url from the query string with no validation before performing an HTTP request.",
+      "Requests to the provided URL are made with verify set to false (SSL verification disabled) and the response is returned directly, potentially leaking internal resources."
+    ],
+    "confidence": "HIGH",
+    "analysis_summary": "The SSRF endpoint does not validate user-supplied URLs and uses them to perform HTTP requests, enabling SSRF to internal systems or internal resources.",
+    "validation_context": {
+      "source_directory": "testing-assets/vuln-app-main",
+      "analysis_timestamp": "2025-08-18T02:00:00Z",
+      "patterns_checked": 5
+    }
+  },
+  {
+    "vulnerability_name": "SQL Injection in Login Form",
+    "vulnerability_type": "Injection (SQL)",
+    "original_severity": "High",
+    "description": "The login form is vulnerable to SQL injection, allowing attackers to bypass authentication or extract database information.",
+    "status": "vulnerable",
+    "evidence": [
+      "Login flow builds SQL by concatenating user inputs in the query in testing-assets/vuln-app-main/app/routes/auth_routes.py.",
+      "Code comments explicitly mention the SQL injection vulnerability."
+    ],
+    "confidence": "HIGH",
+    "analysis_summary": "User inputs are interpolated into an SQL string without parameterization, enabling injection attacks.",
+    "validation_context": {
+      "source_directory": "testing-assets/vuln-app-main",
+      "analysis_timestamp": "2025-08-18T02:00:00Z",
+      "patterns_checked": 5
+    }
+  },
+  {
+    "vulnerability_name": "Local File Inclusion (Path Traversal)",
+    "vulnerability_type": "Path Traversal / Local File Inclusion",
+    "original_severity": "High",
+    "description": "The file download functionality is vulnerable to path traversal attacks, allowing unauthorized access to sensitive files.",
+    "status": "vulnerable",
+    "evidence": [
+      "Download endpoint constructs file paths starting from the filesystem root and uses user-provided filename without sufficient validation.",
+      "There is an inline note indicating a vulnerability and a path traversal path in testing-assets/vuln-app-main/app/routes/main_routes.py."
+    ],
+    "confidence": "HIGH",
+    "analysis_summary": "User-controlled filename is joined with the filesystem root, enabling traversal to arbitrary files.",
+    "validation_context": {
+      "source_directory": "testing-assets/vuln-app-main",
+      "analysis_timestamp": "2025-08-18T02:00:00Z",
+      "patterns_checked": 5
+    }
+  },
+  {
+    "vulnerability_name": "Insecure Direct Object Reference (IDOR)",
+    "vulnerability_type": "Access Control / IDOR",
+    "original_severity": "Medium",
+    "description": "The application does not properly enforce access controls on user profile pages, allowing users to view other users' profiles by modifying the ID parameter.",
+    "status": "vulnerable",
+    "evidence": [
+      "View_profile loads a user by ID without authorization checks, enabling access to other users' profiles.",
+      "Profile page renders sensitive fields such as email and admin status."
+    ],
+    "confidence": "HIGH",
+    "analysis_summary": "Lack of authorization checks for profile access enables viewing other users data by altering the ID parameter.",
+    "validation_context": {
+      "source_directory": "testing-assets/vuln-app-main",
+      "analysis_timestamp": "2025-08-18T02:00:00Z",
+      "patterns_checked": 5
+    }
+  },
+  {
+    "vulnerability_name": "Stored Cross-Site Scripting (XSS)",
+    "vulnerability_type": "Stored XSS",
+    "original_severity": "Low",
+    "description": "The comment functionality is vulnerable to stored XSS attacks, allowing persistent injection of JavaScript code.",
+    "status": "vulnerable",
+    "evidence": [
+      "Template renders user comments with safe filter on content, bypassing escaping.",
+      "Server stores user input without sanitization in add_comment."
+    ],
+    "confidence": "HIGH",
+    "analysis_summary": "User input is stored raw and later rendered with a safe filter, enabling stored XSS.",
+    "validation_context": {
+      "source_directory": "testing-assets/vuln-app-main",
+      "analysis_timestamp": "2025-08-18T02:00:00Z",
+      "patterns_checked": 5
+    }
+  }
+]

@@ -166,6 +166,38 @@ Los resultados se organizan en **4 colecciones MongoDB**:
 - **analyses**: Resultados de análisis estático/dinámico  
 - **triage_results**: Consolidación final y priorización
 
+*Los resultados de como se almacenan en mongo se pueden observar en [examples](https://github.com/b45t3rr/cai-triage/tree/main/docs/examples)
+
+### 4.4 Integración de Resultados en el Triage
+
+El sistema consolida vulnerabilidades de **múltiples fuentes** en el proceso de triage:
+
+- **Static Agent Results**: Vulnerabilidades detectadas por análisis estático
+- **Dynamic Analysis Results**: Vulnerabilidades confirmadas por explotación
+- **Report Analysis**: Vulnerabilidades extraídas del reporte PDF
+
+**Ejemplo de Consolidación**:
+```json
+{
+  "triage_summary": {
+    "total_vulnerabilities_before_deduplication": 5,
+    "total_unique_vulnerabilities": 5,
+    "vulnerabilities_by_severity": {
+      "Critical": 1,
+      "High": 2, 
+      "Medium": 1,
+      "Low": 1
+    },
+    "sources_processed": 3,
+    "source_files": [
+      "Static Agent Results", 
+      "Dynamic Analysis Results", 
+      "Report Analysis"
+    ]
+  }
+}
+```
+
 ## 5. Proceso de Análisis Paso a Paso
 
 ### 5.1 Comando de Ejecución
@@ -207,9 +239,45 @@ python app.py \
 4. **Salida**: Reporte final priorizado
 5. **Almacenamiento**: Colección `triage_results`
 
-## 6. Ejemplos de Resultados
+## 6. Ejemplos de Resultados Reales
 
-### 6.1 Detección de SQL Injection
+### 6.1 Resultado del Triage Consolidado
+
+El sistema procesó exitosamente **3 fuentes de datos** y consolidó **5 vulnerabilidades únicas**:
+
+**Distribución por Severidad**:
+- **Crítica**: 1 vulnerabilidad
+- **Alta**: 2 vulnerabilidades  
+- **Media**: 1 vulnerabilidad
+- **Baja**: 1 vulnerabilidad
+
+### 6.2 Ejemplo: SSRF Crítico Confirmado
+
+**Vulnerabilidad Consolidada**:
+```json
+{
+  "vulnerability_name": "Server-Side Request Forgery (SSRF)",
+  "vulnerability_type": "Web application",
+  "consolidated_severity": "Critical",
+  "final_status": "vulnerable",
+  "priority": "P0",
+  "description": "SSRF vulnerability in API endpoint that fetches external resources; exploitation confirmed via dynamic analysis.",
+  "sources": ["Report Analysis", "Dynamic Analysis Results"],
+  "confidence": "HIGH"
+}
+```
+
+**Evidencia de Explotación**:
+- ✅ **Intento exitoso**: `GET /api/fetch?api_key=insecure_api_key_123&url=http://internal-server/secret.txt`
+- ✅ **Respuesta confirmada**: Contenido con `INTERNAL_SECRET_FLAG{ssrf_test_successful_internal_access}`
+- ✅ **Datos internos expuestos**: Hostname, Service nginx, Timestamp del servidor interno
+
+**Recomendaciones de Mitigación**:
+1. Implementar listas blancas estrictas para solicitudes salientes
+2. Agregar validación de entrada y controles de red
+3. Usar proxy para solicitudes externas y monitorear patrones SSRF
+
+### 6.3 Detección de SQL Injection (Análisis Estático)
 
 **Código Vulnerable Detectado**:
 ```python
@@ -218,12 +286,13 @@ query = f"SELECT * FROM document WHERE title LIKE '%{search_query}%'"
 documents = db.session.execute(query).fetchall()
 ```
 
-**Análisis Estático**: ✅ Detectado patrón de concatenación SQL
-**Análisis Dinámico**: ✅ Explotación confirmada con payload `' OR '1'='1`
-**Severidad**: CRÍTICA
-**CWE**: CWE-89
+**Resultado del Análisis**:
+- **Fuente**: Static Agent Results
+- **Severidad**: CRÍTICA
+- **CWE**: CWE-89
+- **Estado**: Detectado por análisis estático, pendiente validación dinámica
 
-### 6.2 Detección de Path Traversal
+### 6.4 Detección de Path Traversal (Análisis Estático + Dinámico)
 
 **Código Vulnerable Detectado**:
 ```python
@@ -232,41 +301,45 @@ file_path = os.path.abspath(os.path.join(base_dir, filename.lstrip('/')))
 return send_file(file_path, as_attachment=True)
 ```
 
-**Análisis Estático**: ✅ Detectado uso inseguro de rutas
-**Análisis Dinámico**: ✅ Acceso a `/etc/passwd` confirmado
-**Severidad**: ALTA
-**CWE**: CWE-22
+**Resultado Consolidado**:
+- **Fuentes**: Static Agent Results + Dynamic Analysis Results
+- **Severidad**: ALTA
+- **Explotación Confirmada**: Acceso exitoso a `/etc/passwd`
+- **CWE**: CWE-22
 
-### 6.3 Detección de SSRF
+### 6.5 Flujo de Consolidación Multi-Fuente
 
-**Código Vulnerable Detectado**:
-```python
-# En /app/routes/api_routes.py línea 28
-response = requests.get(url, timeout=5, verify=False)
-return response.text, response.status_code
+```mermaid
+graph TD
+    A[Report PDF] --> D[Triage Agent]
+    B[Static Analysis] --> D
+    C[Dynamic Analysis] --> D
+    D --> E[5 Vulnerabilidades Consolidadas]
+    E --> F[Priorización P0-P3]
+    F --> G[Reporte Final MongoDB]
 ```
 
-**Análisis Estático**: ✅ Detectada validación insuficiente de URL
-**Análisis Dinámico**: ✅ Acceso a servicios internos confirmado
-**Severidad**: ALTA  
-**CWE**: CWE-918
+**Proceso de Deduplicación**:
+1. **Antes**: 5 vulnerabilidades de múltiples fuentes
+2. **Después**: 5 vulnerabilidades únicas (sin duplicados detectados)
+3. **Criterios**: Tipo, ubicación, severidad y evidencia
 
 ## 7. Espacios para Capturas de Pantalla
 
 ### 7.1 Interfaz de Ejecución
-*[Espacio reservado para captura de pantalla del comando de ejecución]*
+![Interfaz de Ejecución](https://i.imgur.com/AXliAIa.png)
 
 ### 7.2 Resultados en MongoDB
-*[Espacio reservado para captura de pantalla de Mongo Express mostrando las colecciones]*
+![Resultados en MongoDB](https://i.imgur.com/AXliAIa.png)
 
 ### 7.3 Logs de Análisis
-*[Espacio reservado para captura de pantalla de los logs durante el análisis]*
+![Logs de Análisis](https://i.imgur.com/kCRPZ7V.png)
 
 ### 7.4 Explotación Dinámica
-*[Espacio reservado para captura de pantalla de la explotación de SQL injection]*
+![Explotación Dinámica](https://i.imgur.com/PIgG22c.png)
 
 ### 7.5 Reporte Final
-*[Espacio reservado para captura de pantalla del reporte de triage final]*
+![Reporte Final](https://i.imgur.com/Lhw74P4.png)
 
 ## 8. Conclusiones y Recomendaciones
 
@@ -307,11 +380,6 @@ OPENAI_MODEL=gpt-4
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ANTHROPIC_MODEL=claude-3-sonnet-20240229
 ```
-
-### 9.2 Acceso a Resultados
-
-**MongoDB**: `mongodb://localhost:27017/vulnerability_triage`
-**Mongo Express**: `http://localhost:8081` (admin/admin123)
 
 ### 9.3 Logs y Monitoreo
 

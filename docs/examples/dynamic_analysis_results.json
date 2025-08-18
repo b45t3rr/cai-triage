@@ -1,0 +1,102 @@
+{
+  "validation_results": [
+    {
+      "vulnerability_name": "Server-Side Request Forgery (SSRF)",
+      "vulnerability_type": "Server-Side Request Forgery",
+      "original_severity": "Critical",
+      "description": "The application contains a Server-Side Request Forgery vulnerability in the API endpoint that fetches external resources. This allows an attacker to make requests to internal services that should not be accessible from outside the network.",
+      "status": "vulnerable",
+      "evidence": [
+        "HTTP GET http://localhost:5000/api/fetch?api_key=insecure_api_key_123&url=http://internal-server/secret.txt returned 200 with content containing INTERNAL_SECRET_FLAG{ssrf_test_successful_internal_access}",
+        "Response content includes the internal secret flag: INTERNAL_SECRET_FLAG{ssrf_test_successful_internal_access}"
+      ],
+      "confidence": "HIGH",
+      "analysis_summary": "The SSRF attempt successfully caused the server to fetch an internal resource and returned content containing a secret flag, demonstrating internal network access via SSRF.",
+      "validation_context": {
+        "target_host": "http://localhost:5000",
+        "analysis_timestamp": "2025-08-18T16:12:00Z",
+        "requests_made": "1",
+        "exploitation_method": "Payload from report: GET /api/fetch?api_key=insecure_api_key_123&url=http://internal-server/secret.txt"
+      }
+    },
+    {
+      "vulnerability_name": "SQL Injection in Login Form",
+      "vulnerability_type": "SQL Injection",
+      "original_severity": "High",
+      "description": "The login form is vulnerable to SQL injection, allowing attackers to bypass authentication or potentially extract database information.",
+      "status": "vulnerable",
+      "evidence": [
+        "Login POST to /login with payload username=admin' or '1'='1 -- &password=admin' or '1'='1 --",
+        "Response shows '¡Bienvenido admin! (SQL Bypass)' in page content",
+        "Set-Cookie session cookie present indicating authentication state",
+        "HTTP 200 OK with vulnerable app UI indicating bypass"
+      ],
+      "confidence": "HIGH",
+      "analysis_summary": "The provided payload bypassed authentication, evidenced by the admin bypass message and a session cookie being issued, enabling an authenticated-like session.",
+      "validation_context": {
+        "target_host": "http://localhost:5000",
+        "analysis_timestamp": "2025-08-18T16:12:00Z",
+        "requests_made": "1",
+        "exploitation_method": "Payload from report: admin' or '1'='1 -- (encoded)"
+      }
+    },
+    {
+      "vulnerability_name": "Local File Inclusion (Path Traversal)",
+      "vulnerability_type": "Path Traversal / Local File Inclusion",
+      "original_severity": "High",
+      "description": "The file download functionality is vulnerable to path traversal attacks, allowing unauthorized access to sensitive files.",
+      "status": "vulnerable",
+      "evidence": [
+        "GET /download?file=../../../../etc/passwd returned 200 with contents of /etc/passwd",
+        "Content-Disposition indicates file attachment 'passwd'",
+        "Content-Length shows payload length and content contains /etc/passwd style data"
+      ],
+      "confidence": "HIGH",
+      "analysis_summary": "Direct access to /etc/passwd via path traversal demonstrates the LFI vulnerability and potential exposure of sensitive system data.",
+      "validation_context": {
+        "target_host": "http://localhost:5000",
+        "analysis_timestamp": "2025-08-18T16:12:00Z",
+        "requests_made": "1",
+        "exploitation_method": "Direct file download with path traversal payload"
+      }
+    },
+    {
+      "vulnerability_name": "Insecure Direct Object Reference (IDOR)",
+      "vulnerability_type": "Insecure Direct Object Reference",
+      "original_severity": "Medium",
+      "description": "The application does not properly enforce access controls on user profile pages, allowing users to view other users' profiles by modifying the ID parameter.",
+      "status": "vulnerable",
+      "evidence": [
+        "GET /profile/2 returned user1's profile content without authentication or proper checks",
+        "Profile contains user data including username, email, and role; demonstrates privacy violation"
+      ],
+      "confidence": "HIGH",
+      "analysis_summary": "Access to another user's profile via direct ID without proper authorization checks indicates the presence of IDOR.",
+      "validation_context": {
+        "target_host": "http://localhost:5000",
+        "analysis_timestamp": "2025-08-18T16:12:00Z",
+        "requests_made": "1",
+        "exploitation_method": "Access via /profile/2 without proper authorization checks"
+      }
+    },
+    {
+      "vulnerability_name": "Stored Cross-Site Scripting (XSS)",
+      "vulnerability_type": "Stored XSS",
+      "original_severity": "Low",
+      "description": "The comment functionality is vulnerable to stored XSS attacks, allowing persistent injection of JavaScript code.",
+      "status": "vulnerable",
+      "evidence": [
+        "POST /comment payload containing <script>alert('XSS')</script> was accepted and later the content page shows a stored script tag in comments section",
+        "GET /document/1 shows the script tag being rendered, indicating XSS execution potential"
+      ],
+      "confidence": "HIGH",
+      "analysis_summary": "Stored XSS payloads were persisted and later rendered in document view, confirming exploitability.",
+      "validation_context": {
+        "target_host": "http://localhost:5000",
+        "analysis_timestamp": "2025-08-18T16:12:00Z",
+        "requests_made": "2",
+        "exploitation_method": "Submit payloads to /comment with XSS content; verify on /document/1"
+      }
+    }
+  ]
+}
