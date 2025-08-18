@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Report Reader Agent - Extrae texto de PDFs y serializa información de vulnerabilidades en JSON
+Report Reader Agent - Extrae texto de PDFs y convierte a entidades de dominio
 
 Este agente se encarga de:
 - Extraer texto de archivos PDF
 - Interpretar el contenido del reporte de seguridad
-- Serializar la información en formato JSON estructurado
-- Identificar scope, credenciales, vulnerabilidades con severidad y detalles
+- Convertir la información a entidades de dominio (Report, Vulnerability)
+- Trabajar con repositorios MongoDB siguiendo Clean Architecture
 """
 
 import os
@@ -15,6 +15,8 @@ import json
 import asyncio
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+from datetime import datetime
+import uuid
 
 try:
     import PyPDF2
@@ -33,6 +35,10 @@ except ImportError:
 from cai.sdk.agents import Runner, Agent, OpenAIChatCompletionsModel, set_tracing_disabled
 from openai import AsyncOpenAI
 from cai.sdk.agents import function_tool
+
+# Importar entidades de dominio
+from ...domain.entities import Report, Vulnerability, SeverityLevel, VulnerabilityStatus, ConfidenceLevel
+from ...domain.repositories import ReportRepository, VulnerabilityRepository
 
 
 class PDFTextExtractor:
@@ -92,27 +98,16 @@ def extract_pdf_text(pdf_path: str) -> str:
         return f"Error al extraer texto: {str(e)}"
 
 
-@function_tool
-def save_json_report(json_data: str, output_path: str = "report_analysis.json") -> str:
-    """Guarda el reporte JSON en un archivo"""
-    try:
-        # Validar que sea JSON válido
-        parsed_data = json.loads(json_data)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(parsed_data, f, indent=2, ensure_ascii=False)
-        
-        return f"Reporte JSON guardado exitosamente en: {output_path}"
-    except json.JSONDecodeError as e:
-        return f"Error: JSON inválido - {str(e)}"
-    except Exception as e:
-        return f"Error al guardar archivo: {str(e)}"
+
 
 
 class ReportReaderAgent:
-    """Agente especializado en leer reportes de seguridad y extraer información estructurada"""
+    """Agente especializado en leer reportes de seguridad y convertir a entidades de dominio"""
     
-    def __init__(self):
+    def __init__(self, report_repository: ReportRepository, vulnerability_repository: VulnerabilityRepository):
+        self.report_repository = report_repository
+        self.vulnerability_repository = vulnerability_repository
+        
         self.agent = Agent(
             name="Report Reader Agent",
             description="Agente especializado en análisis de reportes de seguridad PDF",
@@ -163,15 +158,15 @@ class ReportReaderAgent:
                - Estándares seguidos (OWASP, NIST, etc.)
             
             IMPORTANTE: 
-            - Estructura toda la información en un JSON válido y bien formateado
+            - Estructura toda la información en formato JSON válido para procesamiento
             - No inventes información que no esté en el texto
             - Si alguna sección no está presente, marca como "No especificado"
             - Mantén la precisión técnica de los términos de seguridad
             - Organiza las vulnerabilidades por severidad (de mayor a menor)
+            - La información será almacenada directamente en MongoDB
             """,
             tools=[
                 extract_pdf_text,
-                save_json_report,
             ],
             model=OpenAIChatCompletionsModel(
                 model=os.getenv('CAI_MODEL', "gpt-5-nano"),
@@ -179,19 +174,14 @@ class ReportReaderAgent:
             )
         )
     
-    async def process_pdf_report(self, pdf_path: str, output_json_path: Optional[str] = None) -> Dict[str, Any]:
-        """Procesa un reporte PDF y retorna la información estructurada"""
-        
-        if output_json_path is None:
-            pdf_name = Path(pdf_path).stem
-            output_json_path = f"{pdf_name}_analysis.json"
+    async def process_pdf_report(self, pdf_path: str) -> Report:
+        """Procesa un reporte PDF y retorna una entidad Report con vulnerabilidades"""
         
         prompt = f"""
         Analiza el siguiente reporte de seguridad PDF y extrae toda la información relevante:
         
         1. Primero, extrae el texto del archivo PDF: {pdf_path}
         2. Analiza el contenido y estructura la información en formato JSON
-        3. Guarda el resultado en: {output_json_path}
         
         El JSON debe seguir esta estructura:
         {{
@@ -214,6 +204,7 @@ class ReportReaderAgent:
             "vulnerabilities": [
                 {{
                     "name": "string",
+                    "type": "string",
                     "severity": "Critical|High|Medium|Low|Info",
                     "description": "string",
                     "exploitation_steps": "string",
@@ -248,24 +239,135 @@ class ReportReaderAgent:
         print("\nAnálisis del reporte completado:")
         print(result.final_output)
         
-        # Intentar cargar el JSON generado
+        # Cargar el JSON generado y convertir a entidades de dominio
         try:
-            if os.path.exists(output_json_path):
-                with open(output_json_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            # Extraer JSON del output del agente
+            output = result.final_output
+            # Buscar JSON en el output
+            json_start = output.find('{')
+            json_end = output.rfind('}') + 1
+            if json_start != -1 and json_end > json_start:
+                json_str = output[json_start:json_end]
+                data = json.loads(json_str)
+            else:
+                data = None
+            
+            if data:
+                # Crear entidad Report
+                report = self._create_report_entity(data, pdf_path)
+                
+                # Guardar el reporte en MongoDB
+                await self.report_repository.save(report)
+                
+                # Crear y guardar vulnerabilidades
+                vulnerabilities = self._create_vulnerability_entities(data, report.id)
+                for vuln in vulnerabilities:
+                    await self.vulnerability_repository.save(vuln)
+                
+                return report
+            else:
+                raise Exception("No se pudo extraer JSON válido del resultado")
+                
         except Exception as e:
-            print(f"Error al cargar el JSON generado: {e}")
+            print(f"Error al procesar el JSON generado: {e}")
+            raise
         
-        return {"error": "No se pudo generar el análisis JSON"}
+        raise Exception("No se pudo generar el análisis JSON")
+    
+    def _create_report_entity(self, data: Dict[str, Any], pdf_path: str) -> Report:
+        """Convierte los datos JSON a una entidad Report"""
+        report_info = data.get("report_info", {})
+        scope = data.get("scope", {})
+        credentials = data.get("credentials", {})
+        executive_summary = data.get("executive_summary", {})
+        methodology = data.get("methodology", {})
+        
+        return Report(
+            id=str(uuid.uuid4()),
+            title=report_info.get("title", "Reporte de Seguridad"),
+            file_path=pdf_path,
+            client=report_info.get("client", "No especificado"),
+            consultant=report_info.get("consultant", "No especificado"),
+            version=report_info.get("version", "1.0"),
+            targets=scope.get("targets", []),
+            applications=scope.get("applications", []),
+            limitations=scope.get("limitations", ""),
+            test_accounts=credentials.get("test_accounts", {}),
+            access_levels=credentials.get("access_levels", []),
+            tools_used=methodology.get("tools_used", []),
+            techniques=methodology.get("techniques", []),
+            standards=methodology.get("standards", []),
+            key_findings=executive_summary.get("key_findings", []),
+            general_recommendations=executive_summary.get("recommendations", []),
+            created_at=datetime.utcnow(),
+            report_date=datetime.utcnow(),  # TODO: Parse from report_info.date
+            processed_at=datetime.utcnow()
+        )
+    
+    def _create_vulnerability_entities(self, data: Dict[str, Any], report_id: str) -> List[Vulnerability]:
+        """Convierte los datos JSON a entidades Vulnerability"""
+        vulnerabilities = []
+        vuln_data_list = data.get("vulnerabilities", [])
+        
+        for vuln_data in vuln_data_list:
+            # Mapear severidad
+            severity_str = vuln_data.get("severity", "Info").lower()
+            severity_map = {
+                "critical": SeverityLevel.CRITICAL,
+                "high": SeverityLevel.HIGH,
+                "medium": SeverityLevel.MEDIUM,
+                "low": SeverityLevel.LOW,
+                "info": SeverityLevel.INFO
+            }
+            severity = severity_map.get(severity_str, SeverityLevel.INFO)
+            
+            vulnerability = Vulnerability(
+                id=str(uuid.uuid4()),
+                name=vuln_data.get("name", "Vulnerabilidad sin nombre"),
+                vulnerability_type=vuln_data.get("type", "Unknown"),
+                description=vuln_data.get("description", ""),
+                severity=severity,
+                status=VulnerabilityStatus.VULNERABLE,
+                confidence=ConfidenceLevel.MEDIUM,
+                evidence=[],
+                exploitation_steps=vuln_data.get("exploitation_steps", ""),
+                impact=vuln_data.get("impact", ""),
+                remediation=vuln_data.get("remediation", ""),
+                mitigation_recommendations=[],
+                cve=vuln_data.get("cve"),
+                cvss_score=vuln_data.get("cvss_score"),
+                sources=[f"report:{report_id}"],
+                report_id=report_id,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            
+            # Calcular prioridad basada en severidad y confianza
+            vulnerability.priority = vulnerability.calculate_priority()
+            
+            vulnerabilities.append(vulnerability)
+        
+        return vulnerabilities
 
 
 async def main():
     """Función principal para probar el agente"""
+    
+    # Configurar conexión a MongoDB
+    from ..database import MongoDBConnection
+    from ..mongodb_repositories import MongoReportRepository, MongoVulnerabilityRepository
+    
+    # Inicializar conexión a MongoDB
+    db_connection = MongoDBConnection()
+    await db_connection.connect()
+    
+    # Crear repositorios
+    report_repo = MongoReportRepository(db_connection)
+    vuln_repo = MongoVulnerabilityRepository(db_connection)
+    
     # Configurar el agente
     set_tracing_disabled(True)
-    
-    # Crear instancia del agente
-    reader_agent = ReportReaderAgent()
+    reader_agent = ReportReaderAgent(report_repo, vuln_repo)
     
     # Ruta del PDF de ejemplo (ajustar según sea necesario)
     pdf_path = "testing-assets/report.pdf"
@@ -273,17 +375,34 @@ async def main():
     if not os.path.exists(pdf_path):
         print(f"Archivo PDF no encontrado: {pdf_path}")
         print("Por favor, proporciona la ruta correcta al archivo PDF.")
+        await db_connection.close()
         return
     
     print(f"Procesando reporte: {pdf_path}")
     
-    # Procesar el reporte
-    result = await reader_agent.process_pdf_report(pdf_path)
+    try:
+        # Procesar el reporte
+        report = await reader_agent.process_pdf_report(pdf_path)
+        
+        print("\n" + "="*50)
+        print("RESULTADO DEL ANÁLISIS:")
+        print("="*50)
+        print(f"ID: {report.id}")
+        print(f"Título: {report.title}")
+        print(f"Cliente: {report.client}")
+        print(f"Fecha de procesamiento: {report.processed_at}")
+        
+        # Obtener vulnerabilidades asociadas
+        vulnerabilities = await vuln_repo.find_by_source(f"report:{report.id}")
+        print(f"\nVulnerabilidades encontradas: {len(vulnerabilities)}")
+        for vuln in vulnerabilities:
+            print(f"- {vuln.name} ({vuln.severity.value})")
+            
+    except Exception as e:
+        print(f"Error al procesar el reporte: {e}")
     
-    print("\n" + "="*50)
-    print("RESULTADO DEL ANÁLISIS:")
-    print("="*50)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    # Cerrar conexión
+    await db_connection.close()
 
 
 if __name__ == "__main__":

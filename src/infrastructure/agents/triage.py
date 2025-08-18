@@ -3,18 +3,19 @@
 Triage Agent - Consolida y prioriza vulnerabilidades de múltiples fuentes de análisis
 
 Este agente se encarga de:
-- Leer vulnerabilidades desde múltiples archivos JSON (análisis estático, dinámico, etc.)
+- Leer vulnerabilidades desde MongoDB
 - Detectar y correlacionar vulnerabilidades duplicadas usando análisis semántico con LLM
 - Consolidar evidencia de múltiples fuentes
 - Asignar severidad y prioridad basada en evidencia consolidada
 - Proporcionar recomendaciones de mitigación específicas
-- Determinar estado final de vulnerabilidad (vulnerable/no vulnerable)
+- Generar y guardar resultados de triage en MongoDB
 """
 
 import os
 import sys
 import json
 import asyncio
+import uuid
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +25,14 @@ import re
 from cai.sdk.agents import Runner, Agent, OpenAIChatCompletionsModel, set_tracing_disabled
 from openai import AsyncOpenAI
 from cai.sdk.agents import function_tool
+
+from ...domain.entities import (
+    Vulnerability, Analysis, TriageResult, SeverityLevel,
+    VulnerabilityStatus, ConfidenceLevel
+)
+from ...domain.repositories import (
+    VulnerabilityRepository, AnalysisRepository, TriageResultRepository
+)
 
 @function_tool
 def read_json_file_tool(file_path: str) -> str:
@@ -36,18 +45,20 @@ def read_json_file_tool(file_path: str) -> str:
         return f"Error leyendo {file_path}: {e}"
 
 @function_tool
-def save_triage_results_tool(results: str, output_file: str = 'triage_results.json') -> str:
-    """Guarda los resultados del triage en un archivo JSON"""
+def save_triage_results_tool(results: str) -> str:
+    """Procesa y retorna los resultados del triage para ser guardados en MongoDB"""
     try:
-        # Parsear el JSON string a dict
+        # Parsear el JSON string a dict para validar formato
         results_dict = json.loads(results)
         
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(results_dict, f, indent=2, ensure_ascii=False)
+        # Validar estructura requerida
+        if 'triage_summary' not in results_dict or 'consolidated_vulnerabilities' not in results_dict:
+            return "Error: Estructura de resultados inválida. Se requieren 'triage_summary' y 'consolidated_vulnerabilities'"
         
-        return f"Resultados guardados exitosamente en {output_file}"
+        # Retornar los resultados como JSON string para procesamiento posterior
+        return f"TRIAGE_RESULTS_JSON:{results}"
     except Exception as e:
-        return f"Error guardando resultados: {e}"
+        return f"Error procesando resultados: {e}"
 
 def read_json_file(file_path: str) -> Dict[str, Any]:
     """Lee un archivo JSON y retorna su contenido"""
@@ -151,9 +162,15 @@ def generate_mitigation_recommendations(vuln_type: str, vuln_name: str) -> List[
 class TriageAgent:
     """Agente especializado en triage inteligente de vulnerabilidades usando LLM"""
     
-    def __init__(self):
-        self.vulnerabilities = {}
-        self.sources_data = {}
+    def __init__(
+        self,
+        vulnerability_repository: VulnerabilityRepository,
+        analysis_repository: AnalysisRepository,
+        triage_result_repository: TriageResultRepository
+    ):
+        self.vulnerability_repository = vulnerability_repository
+        self.analysis_repository = analysis_repository
+        self.triage_result_repository = triage_result_repository
         
         # Configurar el agente CAI para correlación inteligente
         self.agent = Agent(
@@ -255,46 +272,72 @@ class TriageAgent:
             )
         )
     
-    async def perform_intelligent_triage(self, files: List[str]) -> Dict[str, Any]:
-        """Realiza triage inteligente usando el agente CAI"""
+    async def perform_triage(
+        self, 
+        report_id: str,
+        vulnerabilities: List[Vulnerability], 
+        analyses: List[Analysis]
+    ) -> TriageResult:
+        """Realiza triage inteligente de vulnerabilidades y análisis"""
         
-        # Verificar que los archivos existen
-        existing_files = []
-        for file_path in files:
-            if os.path.exists(file_path):
-                existing_files.append(file_path)
-                print(f"  ✓ Archivo encontrado: {file_path}")
-            else:
-                print(f"  ✗ Archivo no encontrado: {file_path}")
+        # Preparar datos para el análisis
+        vulnerabilities_data = []
+        for vuln in vulnerabilities:
+            vuln_data = {
+                "id": vuln.id,
+                "name": vuln.name,
+                "type": vuln.vulnerability_type,
+                "severity": vuln.severity.value,
+                "description": vuln.description,
+                "file_path": vuln.file_path,
+                "line_number": vuln.line_number,
+                "evidence": vuln.evidence,
+                "status": vuln.status.value,
+                "sources": vuln.sources
+            }
+            vulnerabilities_data.append(vuln_data)
         
-        if not existing_files:
-            return {"error": "No se encontraron archivos de análisis"}
+        analyses_data = []
+        for analysis in analyses:
+            analysis_data = {
+                "id": analysis.id,
+                "vulnerability_id": analysis.vulnerability_id,
+                "analysis_type": analysis.analysis_type.value,
+                "status": analysis.status,
+                "confidence": analysis.confidence.value,
+                "evidence": analysis.evidence,
+                "analysis_summary": analysis.analysis_summary,
+                "file_path": analysis.file_path,
+                "line_number": analysis.line_number
+            }
+            analyses_data.append(analysis_data)
         
         # Crear prompt para el agente
         prompt = f"""
-        Realiza un triage inteligente de vulnerabilidades de los siguientes archivos:
+        Realiza un triage inteligente de vulnerabilidades con los siguientes datos:
         
-        Archivos a procesar:
-        {chr(10).join(f"- {file}" for file in existing_files)}
+        **VULNERABILIDADES ({len(vulnerabilities_data)}):**
+        {json.dumps(vulnerabilities_data, indent=2, ensure_ascii=False)}
+        
+        **ANÁLISIS ({len(analyses_data)}):**
+        {json.dumps(analyses_data, indent=2, ensure_ascii=False)}
         
         INSTRUCCIONES ESPECÍFICAS:
         
-        1. **Lee cada archivo JSON** usando la herramienta read_json_file_tool
-        
-        2. **Analiza y correlaciona** las vulnerabilidades encontradas:
+        1. **Analiza y correlaciona** las vulnerabilidades:
            - Identifica vulnerabilidades duplicadas entre fuentes
-           - Considera variaciones en nombres (ej: "SQL Injection" = "Inyección SQL")
+           - Considera variaciones en nombres y tipos
            - Evalúa similitud en ubicaciones y parámetros afectados
         
-        3. **Consolida la información**:
+        2. **Consolida la información**:
            - Combina evidencia de todas las fuentes
            - Usa la severidad más alta encontrada
-           - Determina estado final (vulnerable si cualquier fuente lo confirma)
-           - Asigna prioridad basada en severidad y evidencia de explotación
+           - Determina estado final basado en análisis
+           - Asigna prioridad basada en severidad y evidencia
         
-        4. **Genera el reporte consolidado** con la estructura JSON especificada
+        3. **Genera el reporte consolidado** con estructura JSON válida
         
-        5. **Guarda los resultados** usando save_triage_results_tool
+        4. **Procesa los resultados** usando save_triage_results_tool para validar el formato
         
         Procede con el análisis completo.
         """
@@ -305,16 +348,85 @@ class TriageAgent:
         print("✅ Análisis completado por el agente")
         print(result.final_output)
         
-        # Intentar cargar el JSON de resultados generado
+        # Procesar resultados directamente del output del agente
         try:
-            results_file = "triage_results.json"
-            if os.path.exists(results_file):
-                with open(results_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            # Buscar el JSON de resultados en el output del agente
+            output_text = result.final_output
+            results_data = None
+            
+            # Buscar el marcador de resultados JSON
+            if "TRIAGE_RESULTS_JSON:" in output_text:
+                json_start = output_text.find("TRIAGE_RESULTS_JSON:") + len("TRIAGE_RESULTS_JSON:")
+                json_text = output_text[json_start:].strip()
+                
+                # Extraer solo el JSON válido
+                try:
+                    results_data = json.loads(json_text)
+                except json.JSONDecodeError:
+                    # Intentar extraer JSON usando regex si el parsing directo falla
+                    import re
+                    json_match = re.search(r'\{.*\}', json_text, re.DOTALL)
+                    if json_match:
+                        results_data = json.loads(json_match.group())
+            
+            if results_data:
+                # Extraer información del triage
+                triage_summary = results_data.get('triage_summary', {})
+                consolidated_vulns = results_data.get('consolidated_vulnerabilities', [])
+                
+                # Calcular distribución de severidad
+                severity_distribution = triage_summary.get('vulnerabilities_by_severity', {})
+                
+                # Crear entidad TriageResult
+                triage_result = TriageResult(
+                    id=str(uuid.uuid4()),
+                    report_id=report_id,
+                    analysis_ids=[a.id for a in analyses if a.id],
+                    consolidated_vulnerability_ids=[v['vulnerability_name'] for v in consolidated_vulns],
+                    vulnerabilities_by_severity=severity_distribution,
+                    total_vulnerabilities_before_deduplication=triage_summary.get('total_vulnerabilities_before_deduplication', len(vulnerabilities)),
+                    total_unique_vulnerabilities=triage_summary.get('total_unique_vulnerabilities', len(consolidated_vulns)),
+                    sources_processed=triage_summary.get('sources_processed', 2),
+                    source_files=triage_summary.get('source_files', ["Static Agent Results", "Dynamic Analysis Results"]),
+                    analysis_timestamp=datetime.utcnow()
+                )
+                
+                # Guardar resultado en MongoDB
+                await self.triage_result_repository.save(triage_result)
+                
+                print(f"✅ Resultados de triage guardados en MongoDB para reporte {report_id}")
+                return triage_result
+                
         except Exception as e:
-            print(f"Error al cargar los resultados generados: {e}")
+            print(f"Error al procesar los resultados generados: {e}")
         
-        return {"error": "No se pudieron generar los resultados de triage"}
+        # Crear resultado básico si falla el procesamiento
+        basic_triage = TriageResult(
+            id=str(uuid.uuid4()),
+            report_id=report_id,
+            analysis_ids=[a.id for a in analyses if a.id],
+            consolidated_vulnerability_ids=[v.id for v in vulnerabilities],
+            vulnerabilities_by_severity=self._calculate_basic_severity_distribution(vulnerabilities),
+            total_vulnerabilities_before_deduplication=len(vulnerabilities),
+            total_unique_vulnerabilities=len(vulnerabilities),
+            sources_processed=1,
+            source_files=["Basic Triage"],
+            analysis_timestamp=datetime.utcnow()
+        )
+        
+        await self.triage_result_repository.save(basic_triage)
+        return basic_triage
+    
+    def _calculate_basic_severity_distribution(self, vulnerabilities: List[Vulnerability]) -> Dict[str, int]:
+        """Calcula distribución básica de severidad"""
+        distribution = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+        
+        for vuln in vulnerabilities:
+            severity = vuln.severity.value.capitalize()
+            if severity in distribution:
+                distribution[severity] += 1
+        
+        return distribution
 
 async def main():
     """Función principal para ejecutar el triage inteligente"""

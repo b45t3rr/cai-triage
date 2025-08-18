@@ -3,10 +3,10 @@
 Dynamic Exploitation Agent - Replica explotaciones de vulnerabilidades mediante ataques dinámicos
 
 Este agente se encarga de:
-- Leer vulnerabilidades desde report_analysis.json
+- Leer vulnerabilidades desde MongoDB
 - Replicar exactamente los mismos ataques, payloads y técnicas
 - Validar el estado de vulnerabilidades en endpoints específicos
-- Generar un JSON de validación con resultados y evidencia técnica
+- Generar análisis y actualizar el estado en MongoDB
 """
 
 import os
@@ -20,11 +20,17 @@ from pathlib import Path
 from datetime import datetime
 import time
 import re
+import uuid
 
 from cai.sdk.agents import Runner, Agent, OpenAIChatCompletionsModel, set_tracing_disabled
 from openai import AsyncOpenAI
 from cai.sdk.agents import function_tool
 from cai.tools.common import run_command
+
+from ...domain.entities import (
+    Vulnerability, Analysis, AnalysisType, VulnerabilityStatus, ConfidenceLevel
+)
+from ...domain.repositories import VulnerabilityRepository, AnalysisRepository
 
 
 @function_tool
@@ -133,27 +139,16 @@ def analyze_response_for_vulnerability(response_json: str, vulnerability_descrip
         return json.dumps({"error": f"Error preparando datos para análisis: {str(e)}"})
 
 
-@function_tool
-def save_dynamic_validation_results(results_json: str, output_path: str = "dynamic_vulnerability_validation_results.json") -> str:
-    """Guarda los resultados de validación dinámica en un archivo JSON"""
-    try:
-        # Validar que sea JSON válido
-        parsed_data = json.loads(results_json)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(parsed_data, f, indent=2, ensure_ascii=False)
-        
-        return f"Resultados de validación dinámica guardados en: {output_path}"
-    except json.JSONDecodeError as e:
-        return f"Error: JSON inválido - {str(e)}"
-    except Exception as e:
-        return f"Error al guardar archivo: {str(e)}"
-
-
 class DynamicExploitationAgent:
     """Agente especializado en replicación dinámica de explotaciones de vulnerabilidades"""
     
-    def __init__(self):
+    def __init__(
+        self,
+        vulnerability_repository: VulnerabilityRepository,
+        analysis_repository: AnalysisRepository
+    ):
+        self.vulnerability_repository = vulnerability_repository
+        self.analysis_repository = analysis_repository
         self.agent = Agent(
             name="Dynamic Exploitation Agent",
             description="Agente especializado en replicación dinámica de explotaciones de vulnerabilidades",
@@ -230,7 +225,6 @@ class DynamicExploitationAgent:
                 read_json_file,
                 make_http_request,
                 analyze_response_for_vulnerability,
-                save_dynamic_validation_results,
             ],
             model=OpenAIChatCompletionsModel(
                 model=os.getenv('CAI_MODEL', "gpt-5-nano"),
@@ -238,15 +232,35 @@ class DynamicExploitationAgent:
             )
         )
     
-    async def exploit_vulnerabilities(self, target_host: str, report_json_path: str = "report_analysis.json") -> Dict[str, Any]:
+    async def exploit_vulnerabilities(self, vulnerabilities: List[Vulnerability], target_host: str) -> List[Analysis]:
         """Replica las explotaciones de vulnerabilidades contra el host objetivo"""
+        
+        # Generar prompt con información de vulnerabilidades
+        vulnerabilities_info = []
+        for vuln in vulnerabilities:
+            vuln_info = {
+                "id": vuln.id,
+                "name": vuln.name,
+                "type": vuln.vulnerability_type,
+                "severity": vuln.severity.value,
+                "description": vuln.description,
+                "file_path": vuln.file_path,
+                "line_number": vuln.line_number,
+                "evidence": vuln.evidence,
+                "exploitation_steps": vuln.exploitation_steps or "No specific steps provided"
+            }
+            vulnerabilities_info.append(vuln_info)
+        
+        vulnerabilities_json = json.dumps(vulnerabilities_info, indent=2, ensure_ascii=False)
         
         prompt = f"""
         Eres un pentester experto con capacidades avanzadas de generación de payloads. Tu tarea es validar dinámicamente vulnerabilidades mediante explotación persistente hasta lograr éxito o determinar conclusivamente la no vulnerabilidad.
         
+        **VULNERABILIDADES A ANALIZAR:**
+        {vulnerabilities_json}
+        
         **INSTRUCCIONES CRÍTICAS:**
-        1. **Lee las vulnerabilidades del reporte:** {report_json_path}
-        2. **Para cada vulnerabilidad, implementa un BUCLE DE EXPLOTACIÓN PERSISTENTE:**
+        1. **Para cada vulnerabilidad, implementa un BUCLE DE EXPLOTACIÓN PERSISTENTE:**
            - Comienza con el ataque EXACTO del reporte JSON
            - Si falla, genera payloads alternativos inteligentes
            - Continúa iterando con nuevos payloads hasta ÉXITO o 10 intentos alcanzados
@@ -307,14 +321,14 @@ class DynamicExploitationAgent:
         - Proporciona evidencia conclusiva tanto para determinaciones vulnerables como no vulnerables
         
         3. **Genera resultados JSON comprehensivos** con estructura validation_result
-        4. **Guarda todos los resultados** en dynamic_vulnerability_validation_results.json como paso final
+        4. **Devuelve todos los resultados** en formato JSON estructurado
         
         **Pasos del Proceso:**
-        1. Lee y parsea {report_json_path}
+        1. Analiza las vulnerabilidades proporcionadas en el JSON anterior
         2. Extrae todas las vulnerabilidades y sus detalles de explotación
         3. Para cada vulnerabilidad, ejecuta el bucle de explotación persistente (hasta 10 intentos)
         4. Marca como vulnerable con evidencia O no_vulnerable con razonamiento detallado
-        5. Guarda resultados en dynamic_vulnerability_validation_results.json
+        5. Devuelve los resultados en formato JSON estructurado
         
         HOST OBJETIVO: {target_host}
         
@@ -325,16 +339,79 @@ class DynamicExploitationAgent:
         print("\nReplicación de explotaciones completada:")
         print(result.final_output)
         
-        # Intentar cargar el JSON de resultados generado
-        try:
-            results_file = "dynamic_vulnerability_validation_results.json"
-            if os.path.exists(results_file):
-                with open(results_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception as e:
-            print(f"Error al cargar los resultados generados: {e}")
+        # Procesar resultados y crear entidades Analysis
+        analyses = []
         
-        return {"error": "No se pudieron generar los resultados de validación dinámica"}
+        try:
+            # Procesar los resultados directamente del agente
+            # El agente debe devolver un JSON con los resultados de validación
+            results_text = result.final_output
+            
+            # Intentar extraer JSON del output del agente
+            import re
+            json_match = re.search(r'\[.*\]', results_text, re.DOTALL)
+            if json_match:
+                results_data = json.loads(json_match.group())
+            else:
+                # Si no hay JSON en el output, intentar parsear todo el output
+                results_data = json.loads(results_text)
+            
+            # Procesar cada resultado de validación
+            validation_results = results_data if isinstance(results_data, list) else results_data.get('validation_results', [])
+            
+            for result_data in validation_results:
+                # Encontrar la vulnerabilidad correspondiente
+                vuln_name = result_data.get('vulnerability_name', '')
+                corresponding_vuln = None
+                
+                for vuln in vulnerabilities:
+                    if vuln.name == vuln_name or vuln.id in result_data.get('vulnerability_id', ''):
+                        corresponding_vuln = vuln
+                        break
+                
+                if corresponding_vuln:
+                    # Crear entidad Analysis
+                    analysis = Analysis(
+                        id=str(uuid.uuid4()),
+                        vulnerability_id=corresponding_vuln.id,
+                        analysis_type=AnalysisType.DYNAMIC_ANALYSIS,
+                        agent_name="dynamic_exploitation_agent",
+                        status=result_data.get('status', 'not_vulnerable'),
+                        confidence=self._map_confidence(result_data.get('confidence', 'MEDIUM')),
+                        evidence=result_data.get('evidence', []),
+                        analysis_summary=result_data.get('analysis_summary', ''),
+                        file_path=getattr(corresponding_vuln, 'file_path', None),
+                        line_number=getattr(corresponding_vuln, 'line_number', None),
+                        created_at=datetime.utcnow(),
+                        completed_at=datetime.utcnow()
+                    )
+                    
+                    # Guardar análisis en MongoDB
+                    await self.analysis_repository.save(analysis)
+                    analyses.append(analysis)
+                    
+                    # Actualizar estado de la vulnerabilidad
+                    if result_data.get('status') == 'vulnerable':
+                        corresponding_vuln.status = VulnerabilityStatus.VULNERABLE
+                    else:
+                        corresponding_vuln.status = VulnerabilityStatus.NOT_VULNERABLE
+                    
+                    await self.vulnerability_repository.update(corresponding_vuln)
+                
+        except Exception as e:
+            print(f"Error al procesar los resultados generados: {e}")
+            logger.error(f"Error processing dynamic analysis results: {e}")
+        
+        return analyses
+    
+    def _map_confidence(self, confidence_str: str) -> ConfidenceLevel:
+        """Mapea string de confianza a enum ConfidenceLevel"""
+        confidence_map = {
+            'HIGH': ConfidenceLevel.HIGH,
+            'MEDIUM': ConfidenceLevel.MEDIUM,
+            'LOW': ConfidenceLevel.LOW
+        }
+        return confidence_map.get(confidence_str.upper(), ConfidenceLevel.MEDIUM)
 
 
 async def main():

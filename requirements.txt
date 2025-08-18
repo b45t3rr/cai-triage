@@ -1,0 +1,84 @@
+# Core dependencies
+pymongo
+motor
+
+# AI/ML libraries
+openai
+cai-framework
+
+# PDF processing
+PyPDF2
+pdfplumber
+fitz
+PyMuPDF
+
+# HTTP requests and web scraping
+requests
+httpx
+aiohttp
+
+# Data processing and analysis
+pandas
+numpy
+jsonschema
+pydantic
+
+# Security tools integration
+semgrep
+
+# Logging and monitoring
+structlog
+rich
+
+# Environment and configuration
+python-dotenv
+click
+
+# Testing (optional)
+pytest
+pytest-asyncio
+pytest-mock
+
+# Development tools (optional)
+black
+flake8
+mypy
+isort
+
+# Additional utilities
+tqdm
+colorama
+tabulate
+psutil
+
+# Date and time handling
+python-dateutil
+
+# File handling
+pathlibutil
+watchdog
+
+# Async support
+asyncio
+aiofiles
+
+# Network and security
+certifi
+urllib3
+cryptography
+
+# Data validation
+marshmallow
+voluptuous
+
+# Performance monitoring
+memory-profiler
+line-profiler
+
+# Database utilities
+alembic
+sqlalchemy
+
+# CLI enhancements
+argparse
+typer
