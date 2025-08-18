@@ -13,6 +13,10 @@
 
 *Un sistema de análisis de vulnerabilidades basado en agentes de IA que utiliza Clean Architecture y MongoDB para validar vulnerabilidades mediante análisis estático y dinámico.*
 
+## Reporte
+
+**Un reporte con información de resultados y configuración se encuentra [AQUI](https://github.com/b45t3rr/cai-triage/blob/main/docs/report.md)
+
 ## 🏗️ Arquitectura
 
 El sistema sigue los principios de Clean Architecture con separación clara de responsabilidades:
@@ -367,4 +371,4 @@ Este proyecto es de uso educativo y de investigación en ciberseguridad.
 
 ---
 
-**Desarrollado con ❤️ para mejorar la seguridad de aplicaciones**
+**Desarrollado como parte de un desafio**
