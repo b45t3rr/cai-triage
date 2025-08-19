@@ -335,49 +335,125 @@ class DynamicExploitationAgent:
         Comienza el proceso de validación dinámica persistente de vulnerabilidades ahora. No te detengas hasta que cada vulnerabilidad sea exitosamente explotada o conclusivamente determinada como no explotable después de 10 intentos.
         """
         
-        result = await Runner.run(self.agent, prompt)
-        print("\nReplicación de explotaciones completada:")
-        print(result.final_output)
+        print("🤖 Ejecutando agente dinámico...")
+        print(f"⏱️ Iniciando análisis dinámico con timeout de 10 minutos")
+        
+        try:
+            # Ejecutar con timeout para evitar que se cuelgue
+            result = await asyncio.wait_for(
+                Runner.run(self.agent, prompt),
+                timeout=600  # 10 minutos
+            )
+            print("\n✅ Replicación de explotaciones completada")
+            print(f"📄 Output del agente (primeros 500 caracteres): {result.final_output[:500]}...")
+        except asyncio.TimeoutError:
+            print("\n⏰ Timeout: El agente dinámico tardó más de 10 minutos")
+            print("🔄 Creando análisis básicos debido al timeout...")
+            analyses = []
+            for vuln in vulnerabilities:
+                timeout_analysis = Analysis(
+                    id=str(uuid.uuid4()),
+                    vulnerability_id=vuln.id,
+                    analysis_type=AnalysisType.DYNAMIC_ANALYSIS,
+                    agent_name="dynamic_exploitation_agent",
+                    status="timeout",
+                    confidence=ConfidenceLevel.LOW,
+                    evidence=["Análisis dinámico excedió el tiempo límite de 10 minutos"],
+                    analysis_summary="El análisis dinámico no pudo completarse debido a timeout",
+                    file_path=getattr(vuln, 'file_path', None),
+                    line_number=getattr(vuln, 'line_number', None),
+                    created_at=datetime.utcnow(),
+                    completed_at=datetime.utcnow()
+                )
+                await self.analysis_repository.save(timeout_analysis)
+                analyses.append(timeout_analysis)
+            return analyses
         
         # Procesar resultados y crear entidades Analysis
         analyses = []
         
         try:
             # Procesar los resultados directamente del agente
-            # El agente debe devolver un JSON con los resultados de validación
             results_text = result.final_output
+            print(f"🔍 Buscando JSON en output de {len(results_text)} caracteres")
             
-            # Intentar extraer JSON del output del agente
+            # Intentar múltiples estrategias para extraer JSON
+            results_data = None
+            
+            # Estrategia 1: Buscar array JSON
             import re
             json_match = re.search(r'\[.*\]', results_text, re.DOTALL)
             if json_match:
-                results_data = json.loads(json_match.group())
-            else:
-                # Si no hay JSON en el output, intentar parsear todo el output
-                results_data = json.loads(results_text)
+                print("📋 Encontrado array JSON, intentando parsear...")
+                try:
+                    results_data = json.loads(json_match.group())
+                    print(f"✅ Array JSON parseado exitosamente: {len(results_data)} elementos")
+                except json.JSONDecodeError as e:
+                    print(f"❌ Error parseando array JSON: {e}")
+            
+            # Estrategia 2: Buscar objeto JSON
+            if not results_data:
+                json_match = re.search(r'\{.*\}', results_text, re.DOTALL)
+                if json_match:
+                    print("📋 Encontrado objeto JSON, intentando parsear...")
+                    try:
+                        results_data = json.loads(json_match.group())
+                        print(f"✅ Objeto JSON parseado exitosamente")
+                    except json.JSONDecodeError as e:
+                        print(f"❌ Error parseando objeto JSON: {e}")
+            
+            # Estrategia 3: Intentar parsear todo el output
+            if not results_data:
+                print("📋 Intentando parsear todo el output como JSON...")
+                try:
+                    results_data = json.loads(results_text)
+                    print(f"✅ Output completo parseado como JSON")
+                except json.JSONDecodeError as e:
+                    print(f"❌ Error parseando output completo: {e}")
+            
+            if not results_data:
+                print("⚠️ No se pudo extraer JSON válido del output del agente")
+                print(f"📄 Output completo:\n{results_text}")
+                return analyses
             
             # Procesar cada resultado de validación
             validation_results = results_data if isinstance(results_data, list) else results_data.get('validation_results', [])
+            print(f"🔄 Procesando {len(validation_results)} resultados de validación")
             
-            for result_data in validation_results:
+            for i, result_data in enumerate(validation_results):
+                print(f"📊 Procesando resultado {i+1}/{len(validation_results)}")
+                
                 # Encontrar la vulnerabilidad correspondiente
                 vuln_name = result_data.get('vulnerability_name', '')
+                vuln_id = result_data.get('vulnerability_id', '')
+                print(f"🔍 Buscando vulnerabilidad: {vuln_name} (ID: {vuln_id})")
+                
                 corresponding_vuln = None
                 
                 for vuln in vulnerabilities:
-                    if vuln.name == vuln_name or vuln.id in result_data.get('vulnerability_id', ''):
+                    if vuln.name == vuln_name or vuln.id in vuln_id:
                         corresponding_vuln = vuln
+                        print(f"✅ Vulnerabilidad encontrada: {vuln.name}")
                         break
                 
-                if corresponding_vuln:
-                    # Crear entidad Analysis
+                if not corresponding_vuln:
+                    print(f"⚠️ No se encontró vulnerabilidad correspondiente para: {vuln_name}")
+                    continue
+                
+                # Crear entidad Analysis
+                print(f"📝 Creando análisis para vulnerabilidad: {corresponding_vuln.name}")
+                analysis_status = result_data.get('status', 'not_vulnerable')
+                analysis_confidence = result_data.get('confidence', 'MEDIUM')
+                print(f"📊 Estado: {analysis_status}, Confianza: {analysis_confidence}")
+                
+                try:
                     analysis = Analysis(
                         id=str(uuid.uuid4()),
                         vulnerability_id=corresponding_vuln.id,
                         analysis_type=AnalysisType.DYNAMIC_ANALYSIS,
                         agent_name="dynamic_exploitation_agent",
-                        status=result_data.get('status', 'not_vulnerable'),
-                        confidence=self._map_confidence(result_data.get('confidence', 'MEDIUM')),
+                        status=analysis_status,
+                        confidence=self._map_confidence(analysis_confidence),
                         evidence=result_data.get('evidence', []),
                         analysis_summary=result_data.get('analysis_summary', ''),
                         file_path=getattr(corresponding_vuln, 'file_path', None),
@@ -385,23 +461,62 @@ class DynamicExploitationAgent:
                         created_at=datetime.utcnow(),
                         completed_at=datetime.utcnow()
                     )
+                    print(f"✅ Análisis creado con ID: {analysis.id}")
                     
                     # Guardar análisis en MongoDB
+                    print(f"💾 Guardando análisis en MongoDB...")
                     await self.analysis_repository.save(analysis)
                     analyses.append(analysis)
+                    print(f"✅ Análisis guardado exitosamente")
                     
                     # Actualizar estado de la vulnerabilidad
-                    if result_data.get('status') == 'vulnerable':
+                    print(f"🔄 Actualizando estado de vulnerabilidad...")
+                    if analysis_status == 'vulnerable':
                         corresponding_vuln.status = VulnerabilityStatus.VULNERABLE
+                        print(f"🔴 Vulnerabilidad marcada como VULNERABLE")
                     else:
                         corresponding_vuln.status = VulnerabilityStatus.NOT_VULNERABLE
+                        print(f"🟢 Vulnerabilidad marcada como NOT_VULNERABLE")
                     
                     await self.vulnerability_repository.update(corresponding_vuln)
+                    print(f"✅ Estado de vulnerabilidad actualizado")
+                    
+                except Exception as analysis_error:
+                    print(f"❌ Error creando/guardando análisis: {analysis_error}")
+                    import traceback
+                    print(f"📄 Traceback: {traceback.format_exc()}")
                 
         except Exception as e:
-            print(f"Error al procesar los resultados generados: {e}")
-            logger.error(f"Error processing dynamic analysis results: {e}")
+            print(f"❌ Error crítico al procesar los resultados generados: {e}")
+            import traceback
+            print(f"📄 Traceback completo: {traceback.format_exc()}")
+            print(f"📄 Output del agente que causó el error:\n{result.final_output}")
+            
+            # Intentar crear análisis básicos para no perder el progreso
+            print(f"🔄 Intentando crear análisis básicos para {len(vulnerabilities)} vulnerabilidades...")
+            for vuln in vulnerabilities:
+                try:
+                    basic_analysis = Analysis(
+                        id=str(uuid.uuid4()),
+                        vulnerability_id=vuln.id,
+                        analysis_type=AnalysisType.DYNAMIC_ANALYSIS,
+                        agent_name="dynamic_exploitation_agent",
+                        status="error",
+                        confidence=ConfidenceLevel.LOW,
+                        evidence=[f"Error durante análisis dinámico: {str(e)}"],
+                        analysis_summary=f"El análisis dinámico falló debido a un error en el procesamiento: {str(e)}",
+                        file_path=getattr(vuln, 'file_path', None),
+                        line_number=getattr(vuln, 'line_number', None),
+                        created_at=datetime.utcnow(),
+                        completed_at=datetime.utcnow()
+                    )
+                    await self.analysis_repository.save(basic_analysis)
+                    analyses.append(basic_analysis)
+                    print(f"✅ Análisis básico creado para: {vuln.name}")
+                except Exception as basic_error:
+                    print(f"❌ Error creando análisis básico para {vuln.name}: {basic_error}")
         
+        print(f"🎯 Análisis dinámico completado: {len(analyses)} análisis creados")
         return analyses
     
     def _map_confidence(self, confidence_str: str) -> ConfidenceLevel:

@@ -599,8 +599,12 @@ class MongoDBTriageResultRepository(TriageResultRepository):
             "report_id": triage_result.report_id,
             "analysis_ids": triage_result.analysis_ids,
             "triage_summary": triage_result.triage_summary,
-            "severity_distribution": {k.value: v for k, v in triage_result.severity_distribution.items()},
+            "vulnerabilities_by_severity": triage_result.vulnerabilities_by_severity,
             "consolidated_vulnerability_ids": triage_result.consolidated_vulnerability_ids,
+            "total_vulnerabilities_before_deduplication": triage_result.total_vulnerabilities_before_deduplication,
+            "total_unique_vulnerabilities": triage_result.total_unique_vulnerabilities,
+            "sources_processed": triage_result.sources_processed,
+            "source_files": triage_result.source_files,
             "created_at": triage_result.created_at,
             "analysis_completed_at": triage_result.analysis_completed_at
         }
@@ -612,20 +616,19 @@ class MongoDBTriageResultRepository(TriageResultRepository):
     
     def _from_document(self, doc: Dict[str, Any]) -> TriageResult:
         """Convierte un documento MongoDB a resultado de triage"""
-        severity_distribution = {}
-        for k, v in doc.get("severity_distribution", {}).items():
-            try:
-                severity_distribution[SeverityLevel(k)] = v
-            except ValueError:
-                continue
+        vulnerabilities_by_severity = doc.get("vulnerabilities_by_severity", {})
         
         return TriageResult(
             id=doc["_id"],
             report_id=doc["report_id"],
             analysis_ids=doc.get("analysis_ids", []),
             triage_summary=doc.get("triage_summary", {}),
-            severity_distribution=severity_distribution,
+            vulnerabilities_by_severity=vulnerabilities_by_severity,
             consolidated_vulnerability_ids=doc.get("consolidated_vulnerability_ids", []),
+            total_vulnerabilities_before_deduplication=doc.get("total_vulnerabilities_before_deduplication", 0),
+            total_unique_vulnerabilities=doc.get("total_unique_vulnerabilities", 0),
+            sources_processed=doc.get("sources_processed", 0),
+            source_files=doc.get("source_files", []),
             created_at=doc.get("created_at", datetime.utcnow()),
             analysis_completed_at=doc.get("analysis_completed_at")
         )

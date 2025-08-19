@@ -397,8 +397,12 @@ class TriageService:
                 report_id=report_id,
                 analysis_ids=[a.id for a in analyses if a.id],
                 triage_summary=triage_summary,
-                severity_distribution=severity_distribution,
                 consolidated_vulnerability_ids=consolidated_ids,
+                vulnerabilities_by_severity={sev.value: count for sev, count in severity_distribution.items()},
+                total_vulnerabilities_before_deduplication=len(all_vulnerabilities),
+                total_unique_vulnerabilities=len(consolidated_vulns),
+                sources_processed=len(set(a.analysis_type for a in analyses)),
+                source_files=["pdf_report", "static_analysis"],
                 analysis_completed_at=datetime.utcnow()
             )
             

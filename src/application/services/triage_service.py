@@ -99,7 +99,7 @@ class TriageService:
         triage_result = TriageResult(
             report_id=report_id,
             consolidated_vulnerability_ids=[v.id for v in unique_vulnerabilities],
-            severity_distribution=severity_distribution,
+            vulnerabilities_by_severity={sev.value: count for sev, count in severity_distribution.items()},
             total_vulnerabilities_before_deduplication=len(vulnerabilities),
             total_unique_vulnerabilities=len(unique_vulnerabilities),
             sources_processed=len(set(a.analysis_type for a in analyses)),

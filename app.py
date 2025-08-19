@@ -174,9 +174,9 @@ def print_results_summary(triage_result):
     print(f"  • Analysis files processed: {summary.get('source_files_analyzed', 0)}")
     
     print("\nSeverity Distribution:")
-    for severity, count in triage_result.severity_distribution.items():
+    for severity, count in triage_result.vulnerabilities_by_severity.items():
         if count > 0:
-            print(f"  • {severity.value.upper()}: {count}")
+            print(f"  • {severity}: {count}")
     
     print(f"\nConsolidated Vulnerabilities: {len(triage_result.consolidated_vulnerability_ids)}")
     

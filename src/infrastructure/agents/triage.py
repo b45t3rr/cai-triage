@@ -201,8 +201,8 @@ class TriageAgent:
             
             4. **Determinación de Estado Final:**
                - Si cualquier fuente confirma que es "vulnerable", el estado final es "vulnerable"
-               - Usa la severidad MÁS ALTA encontrada entre todas las fuentes
                - Calcula confianza basada en número de fuentes que confirman la vulnerabilidad
+               - Reclasifica severidad en base a la evidencia y el estado final
             
             5. **Asignación de Prioridad:**
                - P0: Critical con evidencia de explotación
@@ -331,13 +331,15 @@ class TriageAgent:
         
         2. **Consolida la información**:
            - Combina evidencia de todas las fuentes
-           - Usa la severidad más alta encontrada
+        
+        3. **Realiza el triage**:
            - Determina estado final basado en análisis
-           - Asigna prioridad basada en severidad y evidencia
+           - Asigna prioridad basada en severidad y evidencia (real)
+           - Reclasifica severidad en base a la evidencia y el estado final
         
-        3. **Genera el reporte consolidado** con estructura JSON válida
+        4. **Genera el reporte consolidado** con estructura JSON válida
         
-        4. **Procesa los resultados** usando save_triage_results_tool para validar el formato
+        5. **Procesa los resultados** usando save_triage_results_tool para validar el formato
         
         Procede con el análisis completo.
         """

@@ -185,7 +185,6 @@ config/production.py
 reports/
 output/
 results/
-*.json
 *.xml
 *.html
 *.csv
